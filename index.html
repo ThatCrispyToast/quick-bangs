@@ -10,6 +10,10 @@
 <body>
     <div id="status"></div>
     <script>
+		// Register PWA
+		navigator.serviceWorker.register('/sw.js');
+
+
         // --- CONFIGURATION START ---
         const userOptions = {
             // Default Bang Selection: URL to use if no bang is entered/found
@@ -26,6 +30,7 @@
             }
         };
         // --- CONFIGURATION END ---
+
 
 		// Fetch from Kagi instead of DDG: More comprehensive list of bangs
         const BANGS_URL = "https://raw.githubusercontent.com/kagisearch/bangs/refs/heads/main/data/bangs.json";
