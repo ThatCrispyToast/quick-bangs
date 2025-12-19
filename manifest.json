@@ -1,6 +1,6 @@
 {
-  "name": "Bang Redirector",
-  "short_name": "Bangs",
+  "name": "Quick Bangs",
+  "short_name": "Quick Bangs",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#121212",
