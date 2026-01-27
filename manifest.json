@@ -1,0 +1,11 @@
+{
+  "name": "Quick Bangs",
+  "short_name": "Quick Bangs",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#121212",
+  "icons": [
+    { "src": "https://duckduckgo.com/favicon.ico", "sizes": "64x64", "type": "image/x-icon" }
+  ]
+}
