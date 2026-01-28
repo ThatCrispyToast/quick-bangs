@@ -12,7 +12,7 @@ A suckless bang implementation with custom bang support.
 ### Getting Your URL
 
 #### Self-Hosted
-Clone the repo. Deploy however you deploy your staic web apps.
+Clone the repo. Deploy however you deploy your static web apps.
 #### Public Instance
 A public instance of quick-bangs is availbile at https://thatcrispytoast.github.io/quick-bangs/.
 
