@@ -10,70 +10,56 @@
 <body>
     <div id="status"></div>
     <script>
-		// Register PWA
-		if ('serviceWorker' in navigator) {
+        // Register PWA
+        if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js');
-			console.log("Registered PWA.");
+            console.log("Registered PWA.");
         }
-
 
         // --- CONFIGURATION START ---
         const userOptions = {
-            // Default Bang Selection: URL to use if no bang is entered/found
-	    // "{{{s}}}" represents the query
-            // defaultUrl: "https://google.com/search?q={{{s}}}",
-	    defaultUrl: "https://metasearch-detritus.thatcrispytoast.com/search?q={{{s}}}",
-
-            // Custom Bangs: Define or override fetched kagi bangs
-            // Format: "trigger": "url"
+            // Default Bang Selection
+            // "{{{s}}}" represents the query
+		defaultUrl: "https://kagi.com/search?q={{{s}}}",
+            // Custom Bangs: ALL KEYS SHOULD BE LOWERCASE HERE
             customBangs: {
                 // "gh": "https://github.com/search?q={{{s}}}",
-                // "rd": "https://www.reddit.com/search/?q={{{s}}}",
-                // "yt": "https://www.youtube.com/results?search_query={{{s}}}",
-                // "local": "http://localhost:8080/search?q={{{s}}}" 
             }
         };
         // --- CONFIGURATION END ---
 
-
-		// Fetch from Kagi instead of DDG: More comprehensive list of bangs
+        // Fetch from Kagi instead of DDG
         const BANGS_URL = "https://raw.githubusercontent.com/kagisearch/bangs/refs/heads/main/data/bangs.json";
         
         async function handleRedirect() {
             const params = new URLSearchParams(window.location.search);
             const query = params.get('q');
             const statusDiv = document.getElementById('status');
-
             if (!query) {
                 statusDiv.innerText = "Ready. Add ?q=... to URL to search.";
                 return;
             }
-
             statusDiv.innerText = "Processing...";
             
-            // Only fetch external bangs if we didn't match a custom bang immediately
-            let externalBangs = [];
             if (needsExternalBangs(query)) {
-                externalBangs = await getBangs(statusDiv);
+                const externalBangs = await getBangs(statusDiv);
+                window.location.replace(resolveUrl(query, externalBangs));
+            } else {
+                window.location.replace(resolveUrl(query, []));
             }
-            
-            const finalUrl = resolveUrl(query, externalBangs);
-            window.location.replace(finalUrl);
         }
 
-        // Check if we can skip loading the bangs file
         function needsExternalBangs(query) {
             const match = query.match(/!(\w+)/);
-            if (!match) return false; // No bang, use default
-            const trigger = match[1];
-            return !userOptions.customBangs[trigger]; // Return true if NOT in custom bangs
+            if (!match) return false; 
+            const trigger = match[1].toLowerCase(); // Convert to lowercase
+            return !userOptions.customBangs[trigger];
         }
 
         async function getBangs(statusDiv) {
             const cached = localStorage.getItem('ud_bangs');
             const timestamp = localStorage.getItem('ud_time');
             const cacheTimeout = 2592000000; // 30 Days
-
             if (cached && timestamp && (Date.now() - timestamp < cacheTimeout)) {
                 return JSON.parse(cached);
             }
@@ -97,31 +83,27 @@
         function resolveUrl(query, externalBangs) {
             const match = query.match(/!(\w+)/);
             
-            // Start with User Default
             let url = userOptions.defaultUrl;
             let term = query;
 
             if (match) {
-                const trigger = match[1];
+                const rawTrigger = match[1];
+                const trigger = rawTrigger.toLowerCase(); // Compare using lowercase
                 
-                // 1. Check Custom Bangs (Priority & O(1) Speed)
                 if (userOptions.customBangs[trigger]) {
                     url = userOptions.customBangs[trigger];
-                    term = query.replace(`!${trigger}`, '').trim();
+                    term = query.replace(`!${rawTrigger}`, '').trim();
                 } 
-                // 2. Check External Kagi Bangs
                 else if (externalBangs.length > 0) {
                     const found = externalBangs.find(b => b.t === trigger);
                     if (found) {
                         url = found.u;
-                        term = query.replace(`!${trigger}`, '').trim();
+                        term = query.replace(`!${rawTrigger}`, '').trim();
                     }
                 }
             }
-
             return url.replace('{{{s}}}', encodeURIComponent(term));
         }
-
         handleRedirect();
     </script>
 </body>
