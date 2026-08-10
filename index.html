@@ -3,6 +3,7 @@
 
 <head>
 	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>Redirecting...</title>
 	<style>
 		body {
@@ -29,7 +30,7 @@
 
 			// Quicker Bangs: Define custom bangs, override fetched bangs, or speed up specific bangs.
 			// NOTE: This is checked before the official bang list, so commonly used bangs can be placed here for even faster resolution.
-			// Format: "trigger": "url"
+			// Format: "trigger": "url" (use lowercase triggers; lookups are case-insensitive)
 			quickerBangs: {
 				"yt": "https://www.youtube.com/results?search_query={{{s}}}",
 				"g": "https://www.google.com/search?q={{{s}}}",
@@ -39,29 +40,23 @@
 			}
 		};
 		// --- CONFIGURATION END ---
-
-
-		// Register PWA
-		if ('serviceWorker' in navigator) {
-			navigator.serviceWorker.register('/sw.js');
-			console.log("Registered PWA.");
-		}
-		// Fetch from Kagi instead of DDG: More comprehensive list of bangs
-		const BANGS_URL = "https://raw.githubusercontent.com/kagisearch/bangs/refs/heads/main/data/bangs.json";
-		const DB_NAME = 'quickbangs';
-		const STORE_NAME = 'bangs';
-		const cacheTimeout = 2592000000; // 30 Days
-		// Free the multi-MB array used by older versions of this page.
+	</script>
+	<script src="bangs.js"></script>
+	<script>
+		// Free the keys used by older (localStorage-based) versions of this page.
 		localStorage.removeItem('ud_bangs');
+		localStorage.removeItem('ud_time');
+
+		const statusDiv = document.getElementById('status');
+		function setStatus(text) { statusDiv.innerText = text; }
+
 		async function handleRedirect() {
-			const params = new URLSearchParams(window.location.search);
-			const query = params.get('q');
-			const statusDiv = document.getElementById('status');
+			const query = new URLSearchParams(location.search).get('q');
 			if (!query) {
-				statusDiv.innerText = "Ready. Add ?q=... to URL to search.";
+				setStatus("Ready. Add ?q=... to URL to search.");
 				return;
 			}
-			statusDiv.innerText = "Processing...";
+			setStatus("Processing...");
 			const { trigger, term } = parseQuery(query);
 			// Start with User Default. The bang is only stripped from the search
 			// text when it actually resolves; an unmatched bang is searched literally.
@@ -69,89 +64,63 @@
 			let searchTerm = query;
 			if (trigger) {
 				// Check Custom Bangs (Priority & O(1) Speed, no DB opened)
-				if (userOptions.quickerBangs[trigger]) {
+				if (Object.hasOwn(userOptions.quickerBangs, trigger)) {
 					url = userOptions.quickerBangs[trigger];
 					searchTerm = term;
 				}
 				// Check External Kagi Bangs (single keyed lookup, no full-list parse)
 				else {
-					await ensureBangsFresh(statusDiv);
-					const found = await getBangUrl(trigger);
+					const found = await resolveBang(trigger);
 					if (found) { url = found; searchTerm = term; }
 				}
 			}
-			window.location.replace(url.replace('{{{s}}}', encodeURIComponent(searchTerm)));
+			location.replace(url.replaceAll('{{{s}}}', encodeURIComponent(searchTerm)));
 		}
-		// Extract the bang trigger and the remaining search term once.
+
+		// A bang is any whitespace-separated token starting with "!" (DuckDuckGo
+		// semantics; also covers triggers like "c++" or "a.de"). The first one
+		// found is the trigger; the query with that token removed is the term.
 		function parseQuery(query) {
-			const match = query.match(/!(\w+)/);
-			if (!match) return { trigger: null, term: query };
-			const trigger = match[1];
-			return { trigger, term: query.replace(`!${trigger}`, '').trim() };
+			const tokens = query.trim().split(/\s+/);
+			const i = tokens.findIndex(t => t.length > 1 && t.startsWith('!'));
+			if (i === -1) return { trigger: null, term: query };
+			return {
+				trigger: tokens[i].slice(1).toLowerCase(),
+				term: tokens.filter((_, j) => j !== i).join(' '),
+			};
 		}
-		// Open (or create) the IndexedDB store, memoized so we open at most once.
-		let dbPromise;
-		function openDB() {
-			if (!dbPromise) {
-				dbPromise = new Promise((resolve, reject) => {
-					const req = indexedDB.open(DB_NAME, 1);
-					req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
-					req.onsuccess = () => resolve(req.result);
-					req.onerror = () => reject(req.error);
-				});
-			}
-			return dbPromise;
-		}
-		// Refresh the IndexedDB cache if it's missing or older than the timeout.
-		async function ensureBangsFresh(statusDiv) {
-			const timestamp = localStorage.getItem('ud_time');
-			if (timestamp && (Date.now() - timestamp < cacheTimeout)) return;
-			statusDiv.innerText = "Updating bang cache...";
+
+		// Look the trigger up in IndexedDB, downloading the bang list first if it
+		// has never been fetched. A stale-but-present list is used as-is: the
+		// service worker refreshes it in the background (see sw.js). Without a
+		// controlling service worker (e.g. private browsing), refresh inline.
+		async function resolveBang(trigger) {
 			try {
-				const res = await fetch(BANGS_URL);
-				const text = await res.text();
-				const json = JSON.parse(text.replace(/^var bangs = /, '').replace(/;$/, ''));
-				const db = await openDB();
-				await new Promise((resolve, reject) => {
-					const tx = db.transaction(STORE_NAME, 'readwrite');
-					const store = tx.objectStore(STORE_NAME);
-					store.clear();
-					// Key every trigger/alias to its url. First match wins, so we skip
-					// keys already seen (mirrors the old earliest-entry .find()).
-					const seen = new Set();
-					for (const b of json) {
-						for (const key of [b.t, ...(b.ts || [])]) {
-							if (key && !seen.has(key)) {
-								seen.add(key);
-								store.put(b.u, key);
-							}
-						}
-					}
-					tx.oncomplete = resolve;
-					tx.onerror = () => reject(tx.error);
-				});
-				localStorage.setItem('ud_time', Date.now());
+				const ts = await idbGet(TS_KEY);
+				if (ts === undefined) {
+					setStatus("Downloading bang list (first run)...");
+					await refreshBangs();
+				} else if (Date.now() - ts > CACHE_TTL && !navigator.serviceWorker?.controller) {
+					setStatus("Updating bang cache...");
+					await refreshBangs();
+				}
+				return await idbGet(trigger);
 			} catch (e) {
-				// Leave ud_time unset so the next redirect retries the fetch.
-				console.error("Fetch failed", e);
-			}
-		}
-		// Look up a single bang url by trigger without parsing the whole list.
-		async function getBangUrl(trigger) {
-			try {
-				const db = await openDB();
-				return await new Promise((resolve, reject) => {
-					const req = db.transaction(STORE_NAME, 'readonly')
-						.objectStore(STORE_NAME).get(trigger);
-					req.onsuccess = () => resolve(req.result);
-					req.onerror = () => reject(req.error);
-				});
-			} catch (e) {
-				console.error("Lookup failed", e);
+				// Redirect to the default engine rather than hang; the timestamp
+				// was never written, so the next visit retries the download.
+				console.error("Bang lookup failed", e);
 				return undefined;
 			}
 		}
+
 		handleRedirect();
+
+		// Register the service worker (relative path, so hosting under a
+		// sub-path like GitHub Pages works). It serves this page from cache
+		// instantly and refreshes the bang list in the background.
+		if ('serviceWorker' in navigator) {
+			navigator.serviceWorker.register('./sw.js');
+		}
 	</script>
 </body>
 

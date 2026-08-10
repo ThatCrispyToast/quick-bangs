@@ -14,7 +14,7 @@ A suckless bang implementation with custom bang support.
 #### Self-Hosted
 Clone the repo. Deploy however you deploy your static web apps.
 #### Public Instance
-A public instance of quick-bangs is availbile at https://thatcrispytoast.github.io/quick-bangs/.
+A public instance of quick-bangs is available at https://thatcrispytoast.github.io/quick-bangs/.
 
 ### Adding the Search Engine
 
@@ -26,7 +26,7 @@ Add the engine with the query parameter above to your "Search Shortcuts" list. R
 ![A visual example of adding a search engine to firefox.](./doc_resources/firefox-example.png)
 
 #### Google Chrome and Chromium-Based Browsers (brave, vivaldi, ungoogled-chromium, opera, etc.)
-Add the engine with the query parameter above to your "Site Search" list. Replace the base URL if hosting the project locally. Set as default by clicking the three dots of the left of the newly created search shortcut and seelction "Make default" from the menu.
+Add the engine with the query parameter above to your "Site Search" list. Replace the base URL if hosting the project locally. Set as default by clicking the three dots to the left of the newly created search shortcut and selecting "Make default" from the menu.
 
 ![A visual example of adding a search engine to chrome.](./doc_resources/chrome-example.png)
 
