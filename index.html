@@ -1,127 +1,81 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>Redirecting...</title>
-	<style>
-		body {
-			background: #121212;
-			color: #555;
-			font-family: monospace;
-			display: flex;
-			height: 100vh;
-			justify-content: center;
-			align-items: center;
-			margin: 0;
-		}
-	</style>
+	<title>Quick Bangs</title>
 </head>
-
 <body>
-	<div id="status"></div>
-	<script>
-		// --- CONFIGURATION START ---
-		const userOptions = {
-			// Default Bang Selection: URL to use if no bang is entered/found
-			// "{{{s}}}" represents the query
-			defaultUrl: "https://google.com/search?q={{{s}}}",
-
-			// Quicker Bangs: Define custom bangs, override fetched bangs, or speed up specific bangs.
-			// NOTE: This is checked before the official bang list, so commonly used bangs can be placed here for even faster resolution.
-			// Format: "trigger": "url" (use lowercase triggers; lookups are case-insensitive)
-			quickerBangs: {
+	<div id="status" role="status"></div>
+	<!-- Configure lowercase custom triggers here; {{{s}}} is the encoded search term. -->
+	<script type="application/json" id="config">
+		{
+			"defaultUrl": "https://google.com/search?q={{{s}}}",
+			"quickerBangs": {
 				"yt": "https://www.youtube.com/results?search_query={{{s}}}",
-				"g": "https://www.google.com/search?q={{{s}}}",
-				// "gh": "https://github.com/search?q={{{s}}}",
-				// "rd": "https://www.reddit.com/search/?q={{{s}}}",
-				// "local": "http://localhost:8080/search?q={{{s}}}"
+				"g": "https://www.google.com/search?q={{{s}}}"
 			}
-		};
-		// --- CONFIGURATION END ---
+		}
 	</script>
-	<script src="bangs.js"></script>
 	<script>
-		// Free the keys used by older (localStorage-based) versions of this page.
-		localStorage.removeItem('ud_bangs');
-		localStorage.removeItem('ud_time');
+		const userOptions = JSON.parse(document.getElementById('config').textContent);
+		const params = new URLSearchParams(location.search);
+		const query = params.get('q');
+		let cacheScript;
 
-		const statusDiv = document.getElementById('status');
-		function setStatus(text) { statusDiv.innerText = text; }
+		async function lookup(trigger) {
+			if (Object.hasOwn(userOptions.quickerBangs, trigger)) return userOptions.quickerBangs[trigger];
+			cacheScript ||= new Promise((resolve, reject) => {
+				const script = document.createElement('script');
+				script.src = './bangs.js';
+				script.onload = resolve;
+				script.onerror = () => reject(new Error('Could not load bang cache'));
+				document.head.append(script);
+			});
+			try {
+				await cacheScript;
+				return await resolveBang(trigger);
+			} catch (error) { console.warn('Bang lookup failed', error); }
+		}
+
+		function redirect(url, term) {
+			location.replace(url.replaceAll('{{{s}}}', encodeURIComponent(term)));
+		}
 
 		async function handleRedirect() {
-			const query = new URLSearchParams(location.search).get('q');
 			if (!query) {
-				setStatus("Ready. Add ?q=... to URL to search.");
+				document.getElementById('status').textContent = 'Ready. Add ?q=... to URL to search.';
 				return;
 			}
-			setStatus("Processing...");
-			const { trigger, term } = parseQuery(query);
-			// Start with User Default. The bang is only stripped from the search
-			// text when it actually resolves; an unmatched bang is searched literally.
-			let url = userOptions.defaultUrl;
-			let searchTerm = query;
-			if (trigger) {
-				// Check Custom Bangs (Priority & O(1) Speed, no DB opened)
-				if (Object.hasOwn(userOptions.quickerBangs, trigger)) {
-					url = userOptions.quickerBangs[trigger];
-					searchTerm = term;
-				}
-				// Check External Kagi Bangs (single keyed lookup, no full-list parse)
-				else {
-					const found = await resolveBang(trigger);
-					if (found) { url = found; searchTerm = term; }
+			// Find the first bang without splitting every ordinary search into tokens.
+			const bang = /(?:^|\s)!([^\s]+)/.exec(query);
+			let url;
+			if (bang) {
+				const trigger = bang[1].toLowerCase();
+				url = Object.hasOwn(userOptions.quickerBangs, trigger)
+					? userOptions.quickerBangs[trigger] : await lookup(trigger);
+				if (url) {
+					const term = (query.slice(0, bang.index) + ' ' + query.slice(bang.index + bang[0].length)).trim().replace(/\s+/g, ' ');
+					redirect(url, term);
+					return;
 				}
 			}
-			location.replace(url.replaceAll('{{{s}}}', encodeURIComponent(searchTerm)));
+			const defaultTrigger = params.get('default')?.replace(/^!/, '').toLowerCase();
+			if (defaultTrigger) url = await lookup(defaultTrigger);
+			redirect(url || userOptions.defaultUrl, query);
 		}
 
-		// A bang is any whitespace-separated token starting with "!" (DuckDuckGo
-		// semantics; also covers triggers like "c++" or "a.de"). The first one
-		// found is the trigger; the query with that token removed is the term.
-		function parseQuery(query) {
-			const tokens = query.trim().split(/\s+/);
-			const i = tokens.findIndex(t => t.length > 1 && t.startsWith('!'));
-			if (i === -1) return { trigger: null, term: query };
-			return {
-				trigger: tokens[i].slice(1).toLowerCase(),
-				term: tokens.filter((_, j) => j !== i).join(' '),
-			};
-		}
+		handleRedirect().catch(error => {
+			console.error('Bang lookup failed', error);
+			redirect(userOptions.defaultUrl, query);
+		});
 
-		// Look the trigger up in IndexedDB, downloading the bang list first if it
-		// has never been fetched. A stale-but-present list is used as-is: the
-		// service worker refreshes it in the background (see sw.js). Without a
-		// controlling service worker (e.g. private browsing), refresh inline.
-		async function resolveBang(trigger) {
-			try {
-				const ts = await idbGet(TS_KEY);
-				if (ts === undefined) {
-					setStatus("Downloading bang list (first run)...");
-					await refreshBangs();
-				} else if (Date.now() - ts > CACHE_TTL && !navigator.serviceWorker?.controller) {
-					setStatus("Updating bang cache...");
-					await refreshBangs();
-				}
-				return await idbGet(trigger);
-			} catch (e) {
-				// Redirect to the default engine rather than hang; the timestamp
-				// was never written, so the next visit retries the download.
-				console.error("Bang lookup failed", e);
-				return undefined;
-			}
-		}
-
-		handleRedirect();
-
-		// Register the service worker (relative path, so hosting under a
-		// sub-path like GitHub Pages works). It serves this page from cache
-		// instantly and refreshes the bang list in the background.
-		if ('serviceWorker' in navigator) {
-			navigator.serviceWorker.register('./sw.js');
+		if ('serviceWorker' in navigator && !navigator.serviceWorker.controller?.scriptURL.endsWith('?v=3')) {
+			navigator.serviceWorker.register('./sw.js?v=3').catch(error => console.warn('Offline cache unavailable', error));
 		}
 	</script>
+	<style>
+		body { background: #121212; color: #888; font-family: monospace; display: flex; min-height: 100vh; justify-content: center; align-items: center; margin: 0; }
+	</style>
 </body>
-
 </html>
